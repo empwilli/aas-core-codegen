@@ -3,6 +3,7 @@ import io
 import textwrap
 from typing import (
     cast,
+    Dict,
     Final,
     List,
     Mapping,
@@ -20,12 +21,12 @@ from aas_core_codegen.common import (
     Error,
     Identifier,
     Stripped,
+    indent_but_first_line,
 )
 from aas_core_codegen.java import (
     common as java_common,
     description as java_description,
     naming as java_naming,
-    unrolling as java_unrolling,
 )
 from aas_core_codegen.java.common import (
     INDENT as I,
@@ -120,9 +121,9 @@ def _verify_structure_name_collisions(
                 errors.append(
                     Error(
                         our_type.parsed.node,
-                        f"The C# name {interface_name!r} of the interface "
+                        f"The Java name {interface_name!r} of the interface "
                         f"for the class {our_type.name!r} "
-                        f"collides with the same C# name "
+                        f"collides with the same Java name "
                         f"coming from the {_human_readable_identifier(other)}",
                     )
                 )
@@ -138,9 +139,9 @@ def _verify_structure_name_collisions(
                     errors.append(
                         Error(
                             our_type.parsed.node,
-                            f"The C# name {class_name!r} "
+                            f"The Java name {class_name!r} "
                             f"for the class {our_type.name!r} "
-                            f"collides with the same C# name "
+                            f"collides with the same Java name "
                             f"coming from the {_human_readable_identifier(other)}",
                         )
                     )
@@ -167,7 +168,7 @@ def _verify_structure_name_collisions(
 def _verify_intra_structure_collisions(
     our_type: intermediate.OurType,
 ) -> Optional[Error]:
-    """Verify that no member names collide in the C# structure of our type."""
+    """Verify that no member names collide in the Java structure of our type."""
     errors = []  # type: List[Error]
 
     if isinstance(our_type, intermediate.Enumeration):
@@ -186,14 +187,14 @@ def _verify_intra_structure_collisions(
                 errors.append(
                     Error(
                         prop.parsed.node,
-                        f"C# property {prop_name!r} corresponding "
+                        f"Java property {prop_name!r} corresponding "
                         f"to the meta-model property {prop.name!r} collides with "
                         f"the {observed_member_names[prop_name]}",
                     )
                 )
             else:
                 observed_member_names[prop_name] = (
-                    f"C# property {prop_name!r} corresponding to "
+                    f"Java property {prop_name!r} corresponding to "
                     f"the meta-model property {prop.name!r}"
                 )
 
@@ -205,14 +206,14 @@ def _verify_intra_structure_collisions(
                 errors.append(
                     Error(
                         method.parsed.node,
-                        f"C# method {method_name!r} corresponding "
+                        f"Java method {method_name!r} corresponding "
                         f"to the meta-model method {method.name!r} collides with "
                         f"the {observed_member_names[method_name]}",
                     )
                 )
             else:
                 observed_member_names[method_name] = (
-                    f"C# method {method_name!r} corresponding to "
+                    f"Java method {method_name!r} corresponding to "
                     f"the meta-model method {method.name!r}"
                 )
 
@@ -223,7 +224,7 @@ def _verify_intra_structure_collisions(
         errors.append(
             Error(
                 our_type.parsed.node,
-                f"Naming collision(s) in C# code for our type {our_type.name!r}",
+                f"Naming collision(s) in Java code for our type {our_type.name!r}",
                 underlying=errors,
             )
         )
@@ -266,234 +267,35 @@ def verify(
 # region Generation
 
 
-class _DescendBodyUnroller(java_unrolling.AbstractUnroller):
-    """Generate the code for the descend Stream generator."""
+def _has_descendable_properties(cls: intermediate.Class) -> bool:
+    for prop in cls.properties:
+        if not isinstance(prop.type_annotation, intermediate.OurTypeAnnotation):
+            continue
 
-    # Type name for which we create the descend methods.
-    _class_name: Final[str]
-
-    # If set, generate code that descends recursively into the members.
-    _recurse: Final[bool]
-
-    #: Pre-computed descendability map. A type is descendable if we should unroll it
-    #: further.
-    _descendability: Final[Mapping[intermediate.TypeAnnotationUnion, bool]]
-
-    @staticmethod
-    def _get_item_var(item_level: int) -> Stripped:
-        return Stripped(f"item{item_level}")
-
-
-    @ensure(lambda item_level: item_level >= 0)
-    @staticmethod
-    def _get_parent_item_var(item_name: str, item_level: int) -> Stripped:
-        if item_level == 0:
-            return Stripped(f"{item_name}")
-
-        parent_item_level = item_level - 1
-
-        return _DescendBodyUnroller._get_item_var(parent_item_level)
-
-
-    def __init__(
-        self,
-        class_name: str,
-        recurse: bool,
-        descendability: Mapping[intermediate.TypeAnnotationUnion, bool]
-    ) -> None:
-        self._class_name = class_name
-        self._recurse = recurse
-        self._descendability = descendability
-
-    def _unroll_primitive_type_annotation(
-        self,
-        unrollee_expr: str,
-        type_annotation: intermediate.PrimitiveTypeAnnotation,
-        path: List[str],
-        item_level: int,
-        key_value_level: int,
-    ) -> List[java_unrolling.Node]:
-        """Generate code for the given specific ``type_annotation``."""
-        # We cannot descend into a primitive type.
-
-        return []
-
-    def _unroll_our_type_annotation(
-        self,
-        unrollee_expr: str,
-        type_annotation: intermediate.OurTypeAnnotation,
-        path: List[str],
-        item_level: int,
-        key_value_level: int,
-    ) -> List[java_unrolling.Node]:
-        """Generate code for the given specific ``type_annotation``."""
-        our_type = type_annotation.our_type
-
-        if isinstance(our_type, intermediate.Enumeration):
-            return []
-
-        elif isinstance(our_type, intermediate.ConstrainedPrimitive):
-            # We can not descend into a primitive type.
-            return []
-
-        assert isinstance(our_type, intermediate.Class)  # Exhaustively match
-
-        parent_item_var = _DescendBodyUnroller._get_parent_item_var(f"{self._class_name}.this.{unrollee_expr}",
-                                                                    item_level)
-
-        if not self._recurse or not self._descendability[type_annotation]:
-            if item_level == 0:
-                return [
-                    java_unrolling.Node(
-                        text=f"Stream.<IClass>of({parent_item_var})",
-                        children=[],
-                    )
-                   ]
-            else:
-                return [
-                    java_unrolling.Node(
-                        text=f"{parent_item_var}",
-                        children=[],
-                    )
-                ]
-        else:
-            return [
-                java_unrolling.Node(
-                    text=f"""\
-Stream.concat(Stream.<IClass>of({parent_item_var}),
-{I * (item_level + 1)}StreamSupport.stream({parent_item_var}.descend().spliterator(), false))""",
-                    children=[],
-                )
-            ]
-
-    def _unroll_list_type_annotation(
-        self,
-        unrollee_expr: str,
-        type_annotation: intermediate.ListTypeAnnotation,
-        path: List[str],
-        item_level: int,
-        key_value_level: int,
-    ) -> List[java_unrolling.Node]:
-        """Generate code for the given specific ``type_annotation``."""
-        children = self.unroll(
-            unrollee_expr=unrollee_expr,
-            type_annotation=type_annotation.items,
-            path=[],
-            item_level=item_level + 1,
-            key_value_level=key_value_level,
+        descendability = intermediate.map_descendability(
+            type_annotation=prop.type_annotation
         )
 
-        if len(children) == 0:
-            return []
+        if descendability:
+            return True
 
-        parent_item_var = _DescendBodyUnroller._get_parent_item_var(f"{self._class_name}.this.{unrollee_expr}",
-                                                                    item_level)
-
-        own_item_var = _DescendBodyUnroller._get_item_var(item_level)
-
-        if (
-            isinstance(type_annotation.items, intermediate.OurTypeAnnotation) and
-            self._recurse is False
-        ):
-            return [
-                java_unrolling.Node(
-                    text=f"""StreamSupport.stream({parent_item_var}.spliterator(), false)""",
-                    children=[]
-                )
-            ]
-
-        map_var = java_unrolling.Node(
-            text=f"{own_item_var} ->",
-            children=[],
-        )
-
-        map_args = [map_var] + children
-
-        return [
-            java_unrolling.Node(
-                text=f"""\
-StreamSupport.stream({parent_item_var}.spliterator(), false)
-{I * (item_level + 1)}.flatMap""",
-                children=map_args
-            )
-        ]
+    return False
 
 
-    def _unroll_optional_type_annotation(
-        self,
-        unrollee_expr: str,
-        type_annotation: intermediate.OptionalTypeAnnotation,
-        path: List[str],
-        item_level: int,
-        key_value_level: int,
-    ) -> List[java_unrolling.Node]:
-        """Generate code for the given specific ``type_annotation``."""
-
-        children = self.unroll(
-            unrollee_expr=unrollee_expr,
-            type_annotation=type_annotation.value,
-            path=[],
-            item_level=item_level + 1,
-            key_value_level=key_value_level,
-        )
-
-        if len(children) == 0:
-            return []
-
-        parent_item_var = _DescendBodyUnroller._get_parent_item_var(f"{self._class_name}.this.{unrollee_expr}",
-                                                                    item_level)
-
-        own_item_var = _DescendBodyUnroller._get_item_var(item_level)
-
-        if (
-                isinstance(type_annotation.value, intermediate.OurTypeAnnotation) and \
-                self._recurse is False
-        ):
-            return [
-                java_unrolling.Node(
-                    text=f"""\
-Stream.of({parent_item_var})
-{I}.filter(Objects::nonNull)""",
-                    children=[]
-                )
-            ]
-
-        map_var = java_unrolling.Node(
-            text=f"{own_item_var} ->",
-            children=[],
-        )
-
-        map_args = [map_var] + children
-
-        return [
-            java_unrolling.Node(
-                text=f"""\
-Stream.of({parent_item_var})
-{I}.filter(Objects::nonNull)
-{I}.flatMap""",
-                children=map_args
-            )
-        ]
-
-
-def _generate_descend_body(cls: intermediate.ConcreteClass, recursive: bool) -> Stripped:
+def _generate_descend_body(cls: intermediate.ConcreteClass, recurse: bool) -> Stripped:
     """Generate the iterator function body for recursive and non-recursive descend methods.
 
     We leverage lazily evaluated streams to iterate over the object stream one by one.
     """
+    class_name = java_naming.class_name(cls.name)
+
     blocks = []  # type: List[Stripped]
 
-    blocks.append(
-        Stripped("Stream<IClass> memberStream = Stream.empty();")
-    )
+    blocks.append(Stripped("Stream<IClass> memberStream = Stream.empty();"))
 
     # region Streams
 
-    class_name = java_naming.class_name(cls.name)
-
     for prop in cls.properties:
-        prop_name = java_naming.property_name(prop.name)
-
         descendability = intermediate.map_descendability(
             type_annotation=prop.type_annotation
         )
@@ -501,39 +303,83 @@ def _generate_descend_body(cls: intermediate.ConcreteClass, recursive: bool) -> 
         if not descendability[prop.type_annotation]:
             continue
 
-        unroller = _DescendBodyUnroller(class_name=class_name, recurse=recursive, descendability=descendability)
+        prop_expr = None  # type: Optional[Stripped]
 
-        roots = unroller.unroll(
-            unrollee_expr=prop_name,
-            type_annotation=prop.type_annotation,
-            path=[],
-            item_level=0,
-            key_value_level=0,
-        )
+        prop_name = java_naming.property_name(prop.name)
 
-        assert len(roots) == 1, (
-            "The type annotation should have resulted in a single unrolled node."
-        )
+        type_anno = intermediate.beneath_optional(prop.type_annotation)
 
-        prop_expr = java_unrolling.parentheses_render(roots[0])
+        if isinstance(type_anno, intermediate.PrimitiveTypeAnnotation):
+            continue
+        elif isinstance(type_anno, intermediate.OurTypeAnnotation):
+            if isinstance(type_anno.our_type, intermediate.Enumeration):
+                continue
+            elif isinstance(type_anno.our_type, intermediate.ConstrainedPrimitive):
+                continue
+            elif isinstance(
+                type_anno.our_type,
+                (intermediate.AbstractClass, intermediate.ConcreteClass),
+            ):
+                if not descendability[type_anno] or not recurse:
+                    prop_expr = Stripped(
+                        f"Stream.<IClass>of({class_name}.this.{prop_name})"
+                    )
+                else:
+                    prop_expr = Stripped(
+                        f"""\
+Stream.concat(Stream.<IClass>of({class_name}.this.{prop_name}),
+{I}StreamSupport.stream({class_name}.this.{prop_name}.descend().spliterator(), false))"""
+                    )
+            else:
+                assert_never(type_anno.our_type)
+
+        elif isinstance(type_anno, intermediate.ListTypeAnnotation):
+            assert isinstance(
+                type_anno.items, intermediate.OurTypeAnnotation
+            ) and isinstance(
+                type_anno.items.our_type,
+                (intermediate.AbstractClass, intermediate.ConcreteClass),
+            ), (
+                f"We expect only list of classes "
+                f"at the moment, but you specified {type_anno}. "
+                f"Please contact the developers if you need this feature."
+            )
+
+            if not recurse:
+                prop_expr = Stripped(
+                    f"StreamSupport.stream({class_name}.this.{prop_name}.spliterator(), false)"
+                )
+            else:
+                prop_expr = Stripped(
+                    f"""\
+StreamSupport.stream({class_name}.this.{prop_name}.spliterator(), false)
+{I}.flatMap(item -> Stream.concat(Stream.<IClass>of(item),
+{II}StreamSupport.stream(item.descend().spliterator(), false)))"""
+                )
+
+        else:
+            assert_never(type_anno)
 
         stream_stmt = Stripped(
-f"""memberStream = Stream.<IClass>concat(memberStream,
-{I}{prop_expr});"""
+            f"""\
+if ({prop_name} != null) {{
+{I}memberStream = Stream.<IClass>concat(memberStream,
+{II}{indent_but_first_line(prop_expr, II)});
+}}"""
         )
 
         blocks.append(stream_stmt)
 
     # endregion
 
-    blocks.append(
-        Stripped("return memberStream;")
-    )
+    blocks.append(Stripped("return memberStream;"))
 
     return Stripped("\n\n".join(blocks))
 
 
-def _generate_descend_iterable_name(cls: intermediate.ConcreteClass, recursive: bool) -> Stripped:
+def _generate_descend_iterable_name(
+    cls: intermediate.ConcreteClass, recursive: bool
+) -> Stripped:
     name = java_naming.class_name(cls.name)
 
     if recursive:
@@ -542,16 +388,17 @@ def _generate_descend_iterable_name(cls: intermediate.ConcreteClass, recursive: 
         return Stripped(f"{name}Iterable")
 
 
-def _generate_descend_iterable(cls: intermediate.ConcreteClass, recursive: bool) -> Stripped:
+def _generate_descend_iterable(
+    cls: intermediate.ConcreteClass, recursive: bool
+) -> Stripped:
     """Generate the iterator for the descend method."""
 
     iterable_name = _generate_descend_iterable_name(cls, recursive)
 
     iterable_body = _generate_descend_body(cls, recursive)
 
-    indented_iterable_body = textwrap.indent(iterable_body, II)
-
-    iterable = Stripped(f"""\
+    iterable = Stripped(
+        f"""\
 private class {iterable_name} implements Iterable<IClass> {{
 {I}@Override
 {I}public Iterator<IClass> iterator() {{
@@ -575,17 +422,29 @@ private class {iterable_name} implements Iterable<IClass> {{
 {I}}}
 
 {I}private Stream<IClass> stream() {{
-{indented_iterable_body}
+{II}{indent_but_first_line(iterable_body, II)}
 {I}}}
-}}""")
+}}"""
+    )
 
     return iterable
 
 
-def _generate_descend_method(cls: intermediate.ConcreteClass) -> Stripped:
+def _generate_descend_method(
+    cls: intermediate.ConcreteClass, descendable: bool
+) -> Stripped:
     """Generate the recursive ``Descend`` method for the concrete class ``cls``."""
 
     iterable_name = _generate_descend_iterable_name(cls=cls, recursive=True)
+
+    descend_body = None  # type: Optional[Stripped]
+
+    if descendable:
+        descend_body = Stripped(f"return new {iterable_name}();")
+    else:
+        descend_body = Stripped(f"return Collections.emptyList();")
+
+    assert descend_body is not None
 
     return Stripped(
         f"""\
@@ -593,15 +452,24 @@ def _generate_descend_method(cls: intermediate.ConcreteClass) -> Stripped:
  * Iterate recursively over all the class instances referenced from this instance.
  */
 public Iterable<IClass> descend() {{
-{I}return new {iterable_name}();
+{I}{descend_body}
 }}"""
     )
 
 
-def _generate_descend_once_method(cls: intermediate.ConcreteClass) -> Stripped:
+def _generate_descend_once_method(
+    cls: intermediate.ConcreteClass, descendable: bool
+) -> Stripped:
     """Generate the recursive ``Descend`` method for the concrete class ``cls``."""
 
     iterable_name = _generate_descend_iterable_name(cls=cls, recursive=False)
+
+    descend_body = None  # type: Optional[Stripped]
+
+    if descendable:
+        descend_body = Stripped(f"return new {iterable_name}();")
+    else:
+        descend_body = Stripped(f"return Collections.emptyList();")
 
     return Stripped(
         f"""\
@@ -609,7 +477,7 @@ def _generate_descend_once_method(cls: intermediate.ConcreteClass) -> Stripped:
  * Iterate over all the class instances referenced from this instance.
  */
 public Iterable<IClass> descendOnce() {{
-{I}return new {iterable_name}();
+{I}{descend_body}
 }}"""
     )
 
@@ -668,12 +536,24 @@ class _ImportCollector:
     ) -> List[Stripped]:
         """Generate code for the given specific ``type_annotation``."""
 
+        our_type_pkg = None  # type: Optional[str]
+
         our_type = type_annotation.our_type
 
-        if isinstance(our_type, intermediate.Enumeration):
-            return [Stripped(f"{self._package}.types.enums.*")]
+        if isinstance(our_type, intermediate.ConstrainedPrimitive):
+            return []
+        elif isinstance(our_type, intermediate.Enumeration):
+            our_type_pkg = java_common.ENUM_PKG
+        elif isinstance(our_type, intermediate.Class):
+            our_type_pkg = java_common.INTERFACE_PKG
+        else:
+            assert_never(our_type)
 
-        return []
+        assert our_type_pkg is not None
+
+        our_type_name = java_common.generate_type(type_annotation)
+
+        return [Stripped(f"{self._package}.types.{our_type_pkg}.{our_type_name}")]
 
     def _transform_list_type_annotation(
         self,
@@ -693,6 +573,16 @@ class _ImportCollector:
         """Generate code for the given specific ``type_annotation``."""
         imports = self.transform(type_annotation.value)
 
+        if len(imports) > 0 and isinstance(
+            type_annotation.value, intermediate.ListTypeAnnotation
+        ):
+            imports.extend(
+                [
+                    Stripped("java.lang.Iterable"),
+                    Stripped("java.util.Collections"),
+                ]
+            )
+
         imports.append(Stripped("java.util.Optional"))
 
         return imports
@@ -703,9 +593,28 @@ def _generate_imports_for_interface(
     package: java_common.PackageIdentifier,
 ) -> Stripped:
     """Generate necessary Java Platform imports for the given class ``cls``."""
-    imports = []
+    imports = []  # type: List[Stripped]
+
+    if len(cls.inheritances) == 0:
+        import_name = Stripped(f"{package}.types.{java_common.INTERFACE_PKG}.IClass")
+        imports.append(import_name)
+    else:
+        for inheritance in cls.inheritances:
+            super_name = java_naming.interface_name(inheritance.name)
+
+            import_name = Stripped(
+                f"{package}.types.{java_common.INTERFACE_PKG}.{super_name}"
+            )
+
+            imports.append(import_name)
+
+    if any(prop for prop in cls.properties if prop.specified_for is cls):
+        imports.append(Stripped("java.util.Optional"))
 
     for prop in cls.properties:
+        if prop.specified_for is not cls:
+            continue
+
         import_collector = _ImportCollector(package)
 
         prop_imports = import_collector.transform(prop.type_annotation)
@@ -713,6 +622,9 @@ def _generate_imports_for_interface(
         imports.extend(prop_imports)
 
     for method in cls.methods:
+        if method.specified_for is not cls:
+            continue
+
         import_collector = _ImportCollector(package)
 
         if method.returns is not None:
@@ -727,11 +639,7 @@ def _generate_imports_for_interface(
 
     unique_imports = sorted(set(imports))
 
-    return Stripped(
-        "\n".join(
-            map(lambda imp: f"import {imp};", unique_imports)
-        )
-    )
+    return Stripped("\n".join(map(lambda imp: f"import {imp};", unique_imports)))
 
 
 def _generate_imports_for_class(
@@ -739,18 +647,45 @@ def _generate_imports_for_class(
     package: java_common.PackageIdentifier,
 ) -> Stripped:
     """Generate necessary Java Platform imports for the given class ``cls``."""
-    if (
-        cls.is_implementation_specific
-    ):
+    if cls.is_implementation_specific:
         return Stripped("")
 
     imports = [
-        Stripped(f"{package}.types.model.*"),
         Stripped(f"{package}.visitation.IVisitor"),
         Stripped(f"{package}.visitation.IVisitorWithContext"),
         Stripped(f"{package}.visitation.ITransformer"),
         Stripped(f"{package}.visitation.ITransformerWithContext"),
-    ]
+        Stripped(f"{package}.types.model.IClass"),
+        Stripped("java.util.Optional"),
+    ]  # type: List[Stripped]
+
+    if _has_descendable_properties(cls):
+        imports.extend(
+            [
+                Stripped("java.util.Iterator"),
+                Stripped("java.util.Spliterator"),
+                Stripped("java.util.function.Consumer"),
+                Stripped("java.util.stream.Stream"),
+                Stripped("java.util.stream.StreamSupport"),
+            ]
+        )
+
+    interface_name = java_naming.interface_name(cls.name)
+
+    interface_import = Stripped(
+        f"{package}.types.{java_common.INTERFACE_PKG}.{interface_name}"
+    )
+
+    imports.append(interface_import)
+
+    if any(prop for prop in cls.properties if prop.specified_for is cls):
+        imports.extend(
+            [
+                Stripped("java.util.Collections"),
+                Stripped("java.util.List"),
+                Stripped("java.util.Objects"),
+            ]
+        )
 
     for prop in cls.properties:
         import_collector = _ImportCollector(package)
@@ -772,24 +707,9 @@ def _generate_imports_for_class(
 
             imports.extend(arg_imports)
 
-    imports.extend(["java.util.List",
-                    "java.util.Collections",
-                    "java.util.Iterator",
-                    "java.util.Objects",
-                    "java.util.Optional",
-                    "java.util.Spliterator",
-                    "java.util.function.Consumer",
-                    "java.util.stream.Stream",
-                    "java.util.stream.StreamSupport",
-    ])
-
     unique_imports = sorted(set(imports))
 
-    return Stripped(
-        "\n".join(
-            map(lambda imp: f"import {imp};", unique_imports)
-        )
-    )
+    return Stripped("\n".join(map(lambda imp: f"import {imp};", unique_imports)))
 
 
 @ensure(lambda result: (result[0] is None) ^ (result[1] is None))
@@ -867,7 +787,6 @@ def _generate_interface(
                 prop_comment_errors,
             ) = java_description.generate_comment_for_property(prop.description)
 
-
             if prop_comment_errors is not None:
                 return None, Error(
                     prop.description.parsed.node,
@@ -881,6 +800,9 @@ def _generate_interface(
             blocks.append(Stripped(f"{prop_type} {getter_name}();"))
 
         blocks.append(Stripped(f"void {setter_name}({arg_type} {prop_name});"))
+        blocks.append(
+            Stripped(f"void {setter_name}(Optional<{arg_type}> {prop_name});")
+        )
 
     # endregion
 
@@ -1027,8 +949,12 @@ def _generate_default_constructor(
         return Stripped(""), None
 
     if not all(
-        map(lambda arg: isinstance(arg.type_annotation, intermediate.OptionalTypeAnnotation),
-            cls.constructor.arguments)
+        map(
+            lambda arg: isinstance(
+                arg.type_annotation, intermediate.OptionalTypeAnnotation
+            ),
+            cls.constructor.arguments,
+        )
     ):
         return Stripped(""), None
 
@@ -1044,9 +970,7 @@ def _generate_default_constructor(
         if isinstance(stmt, intermediate_construction.AssignArgument):
             if stmt.default is None:
                 body.append(
-                    Stripped(
-                        f"this.{java_naming.property_name(stmt.name)} = null;"
-                    )
+                    Stripped(f"this.{java_naming.property_name(stmt.name)} = null;")
                 )
             else:
                 if isinstance(stmt.default, intermediate_construction.EmptyList):
@@ -1211,6 +1135,8 @@ def _generate_class(
 
     errors = []  # type: List[Error]
 
+    descendable = _has_descendable_properties(cls)
+
     # region Properties
 
     for prop in cls.properties:
@@ -1348,6 +1274,16 @@ public void {setter_name}({arg_type} {prop_name}) {{
             )
         )
 
+        get_set_blocks.append(
+            Stripped(
+                f"""\
+@Override
+public void {setter_name}(Optional<{arg_type}> {prop_name}) {{
+{I}this.{prop_name} = {prop_name}.orElse(null);
+}}"""
+            )
+        )
+
         blocks.append(Stripped("\n\n".join(get_set_blocks)))
 
     # endregion
@@ -1358,7 +1294,7 @@ public void {setter_name}({arg_type} {prop_name}) {{
 
     for prop in cls.properties:
         if isinstance(
-                prop.type_annotation, intermediate.OptionalTypeAnnotation
+            prop.type_annotation, intermediate.OptionalTypeAnnotation
         ) and isinstance(prop.type_annotation.value, intermediate.ListTypeAnnotation):
             prop_name = java_naming.property_name(prop.name)
             method_name = f"over{java_naming.class_name(prop.name)}OrEmpty"
@@ -1412,8 +1348,8 @@ public Iterable<{items_type}> {method_name}() {{
 
     visit_name = java_naming.method_name(Identifier(f"visit_{cls.name}"))
 
-    blocks.append(_generate_descend_method(cls=cls))
-    blocks.append(_generate_descend_once_method(cls=cls))
+    blocks.append(_generate_descend_method(cls=cls, descendable=descendable))
+    blocks.append(_generate_descend_once_method(cls=cls, descendable=descendable))
     blocks.append(
         Stripped(
             f"""\
@@ -1480,9 +1416,10 @@ public <ContextT, T> T transform(
 
     # region inner classes
 
-    blocks.append(_generate_descend_iterable(cls=cls, recursive=False))
+    if descendable:
+        blocks.append(_generate_descend_iterable(cls=cls, recursive=False))
 
-    blocks.append(_generate_descend_iterable(cls=cls, recursive=True))
+        blocks.append(_generate_descend_iterable(cls=cls, recursive=True))
 
     # endregion
 
@@ -1530,7 +1467,7 @@ public <ContextT, T> T transform(
 
 @ensure(lambda result: (result[0] is None) ^ (result[1] is None))
 def _generate_enum(
-    enum: intermediate.Enumeration
+    enum: intermediate.Enumeration,
 ) -> Tuple[Optional[Stripped], Optional[Error]]:
     """Generate Java code for the enum."""
     writer = io.StringIO()
@@ -1597,10 +1534,10 @@ def _generate_enum(
 class JavaFile:
     """Representation of a Java source file."""
 
-# fmt: off
+    # fmt: off
     @require(lambda name, content: (len(name) > 0) and (len(content) > 0))
     @require(lambda content: content.endswith('\n'), "Trailing newline mandatory for valid end-of-files")
-# fmt: on
+    # fmt: on
     def __init__(
         self,
         name: str,
@@ -1617,23 +1554,21 @@ def _generate_java_file(
     code: Stripped,
     package: java_common.PackageIdentifier,
 ) -> JavaFile:
-
     writer = io.StringIO()
 
-    writer.write(f"""\
+    writer.write(
+        f"""\
 {java_common.WARNING}
 
 package {package};\n\n"""
     )
 
-    if (
-        imports is not None
-        and len(imports) > 0
-    ):
+    if imports is not None and len(imports) > 0:
         writer.write(f"{imports}")
         writer.write("\n\n")
 
-    writer.write(f"""\
+    writer.write(
+        f"""\
 {code}
 
 {java_common.WARNING}
@@ -1721,18 +1656,18 @@ def _generate_structure(
     """
     Generate the Java code for a single structure.
     """
-    assert isinstance(our_type, (
-        intermediate.Enumeration,
-        intermediate.AbstractClass,
-        intermediate.ConcreteClass,
-    ))
+    assert isinstance(
+        our_type,
+        (
+            intermediate.Enumeration,
+            intermediate.AbstractClass,
+            intermediate.ConcreteClass,
+        ),
+    )
 
     files = []  # List[JavaFile]
 
-    if (
-        isinstance(our_type, intermediate.Class)
-        and our_type.is_implementation_specific
-    ):
+    if isinstance(our_type, intermediate.Class) and our_type.is_implementation_specific:
         implementation_key = specific_implementations.ImplementationKey(
             f"Types/{our_type.name}.java"
         )
@@ -1742,35 +1677,35 @@ def _generate_structure(
         code = spec_impls.get(implementation_key, None)
         if code is None:
             return None, Error(
-                    our_type.parsed.node,
-                    f"The implementation is missing "
-                    f"for the implementation-specific class: {implementation_key}",
+                our_type.parsed.node,
+                f"The implementation is missing "
+                f"for the implementation-specific class: {implementation_key}",
             )
 
         structure_name = java_naming.class_name(our_type.name)
 
         file_name = java_common.class_package_path(structure_name)
 
-        package_name = java_common.PackageIdentifier(f"{package}.types.{java_common.CLASS_PKG}")
+        package_name = java_common.PackageIdentifier(
+            f"{package}.types.{java_common.CLASS_PKG}"
+        )
 
         java_source = _generate_java_file(structure_name, imports, code, package_name)
 
         files.append(java_source)
     else:
         if isinstance(
-                our_type, (
-                    intermediate.AbstractClass,
-                    intermediate.ConcreteClass
-                )
+            our_type, (intermediate.AbstractClass, intermediate.ConcreteClass)
         ):
             imports = _generate_imports_for_interface(cls=our_type, package=package)
 
             code, error = _generate_interface(cls=our_type)
             if error is not None:
-                return None, Error(our_type.parsed.node,
-                                   f"Failed to generate the interface code for "
-                                   f"the class {our_type.name!r}",
-                                   [error],
+                return None, Error(
+                    our_type.parsed.node,
+                    f"Failed to generate the interface code for "
+                    f"the class {our_type.name!r}",
+                    [error],
                 )
 
             assert code is not None
@@ -1779,23 +1714,24 @@ def _generate_structure(
 
             file_name = java_common.interface_package_path(structure_name)
 
-            package_name = java_common.PackageIdentifier(f"{package}.types.{java_common.INTERFACE_PKG}")
+            package_name = java_common.PackageIdentifier(
+                f"{package}.types.{java_common.INTERFACE_PKG}"
+            )
 
             java_source = _generate_java_file(file_name, imports, code, package_name)
 
             files.append(java_source)
 
-            if isinstance(
-                    our_type, intermediate.ConcreteClass
-            ):
+            if isinstance(our_type, intermediate.ConcreteClass):
                 imports = _generate_imports_for_class(cls=our_type, package=package)
 
                 code, error = _generate_class(cls=our_type, spec_impls=spec_impls)
                 if error is not None:
-                    return None, Error(our_type.parsed.node,
-                                       f"Failed to generate the class code for "
-                                       f"the class {our_type.name!r}",
-                                       [error],
+                    return None, Error(
+                        our_type.parsed.node,
+                        f"Failed to generate the class code for "
+                        f"the class {our_type.name!r}",
+                        [error],
                     )
 
                 assert code is not None
@@ -1804,20 +1740,23 @@ def _generate_structure(
 
                 file_name = java_common.class_package_path(structure_name)
 
-                package_name = java_common.PackageIdentifier(f"{package}.types.{java_common.CLASS_PKG}")
+                package_name = java_common.PackageIdentifier(
+                    f"{package}.types.{java_common.CLASS_PKG}"
+                )
 
-                java_source = _generate_java_file(file_name, imports, code, package_name)
+                java_source = _generate_java_file(
+                    file_name, imports, code, package_name
+                )
 
                 files.append(java_source)
-        elif isinstance(
-                our_type, intermediate.Enumeration
-        ):
+        elif isinstance(our_type, intermediate.Enumeration):
             code, error = _generate_enum(enum=our_type)
             if error is not None:
-                return None, Error(our_type.parsed.node,
-                                   f"Failed to generate the code for "
-                                   f"the enumeration {our_type.name!r}",
-                                   [error],
+                return None, Error(
+                    our_type.parsed.node,
+                    f"Failed to generate the code for "
+                    f"the enumeration {our_type.name!r}",
+                    [error],
                 )
 
             assert code is not None
@@ -1825,7 +1764,9 @@ def _generate_structure(
 
             file_name = java_common.enum_package_path(structure_name)
 
-            package_name = java_common.PackageIdentifier(f"{package}.types.{java_common.ENUM_PKG}")
+            package_name = java_common.PackageIdentifier(
+                f"{package}.types.{java_common.ENUM_PKG}"
+            )
 
             java_source = _generate_java_file(file_name, None, code, package_name)
 
@@ -1833,8 +1774,8 @@ def _generate_structure(
         else:
             assert_never(our_type)
 
-
     return files, None
+
 
 # fmt: off
 @ensure(lambda result: (result[0] is not None) ^ (result[1] is not None))
@@ -1857,18 +1798,16 @@ def generate(
 
     for our_type in symbol_table.our_types:
         if not isinstance(
-                our_type,
-                (
-                    intermediate.Enumeration,
-                    intermediate.AbstractClass,
-                    intermediate.ConcreteClass,
-                ),
+            our_type,
+            (
+                intermediate.Enumeration,
+                intermediate.AbstractClass,
+                intermediate.ConcreteClass,
+            ),
         ):
             continue
 
-        new_files, error = _generate_structure(our_type,
-                                               package,
-                                               spec_impls)
+        new_files, error = _generate_structure(our_type, package, spec_impls)
 
         if new_files is not None:
             files.extend(new_files)
