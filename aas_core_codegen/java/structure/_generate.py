@@ -889,38 +889,6 @@ Iterable<{items_type}> {method_name}();"""
     return Stripped(writer.getvalue()), None
 
 
-def _generate_default_value(default: intermediate.Default) -> Stripped:
-    """Generate the Java code representing the default value of an argument."""
-    code = None  # type: Optional[str]
-
-    if default is not None:
-        if isinstance(default, intermediate.DefaultPrimitive):
-            if default.value is None:
-                code = "null"
-            elif isinstance(default.value, bool):
-                code = "true" if default.value else "false"
-            elif isinstance(default.value, str):
-                code = java_common.string_literal(default.value)
-            elif isinstance(default.value, int):
-                code = str(default.value)
-            elif isinstance(default.value, float):
-                code = f"{default}d"
-            else:
-                assert_never(default.value)
-        elif isinstance(default, intermediate.DefaultEnumerationLiteral):
-            code = ".".join(
-                [
-                    java_naming.enum_name(default.enumeration.name),
-                    java_naming.enum_literal_name(default.literal.name),
-                ]
-            )
-        else:
-            assert_never(default)
-
-    assert code is not None
-    return Stripped(code)
-
-
 @require(lambda cls: not cls.is_implementation_specific)
 @require(lambda cls: not cls.constructor.is_implementation_specific)
 @ensure(lambda result: (result[0] is not None) ^ (result[1] is not None))
@@ -947,9 +915,9 @@ def _generate_default_constructor(
 
     cls_name = java_naming.class_name(cls.name)
 
-    blocks = []  # type: List[Stripped]
+    blocks = []  # type: List[str]
 
-    blocks.append(Stripped(f"public {cls_name}() {{"))
+    blocks.append(f"public {cls_name}() {{")
 
     body = []  # type: List[Stripped]
 
@@ -999,10 +967,10 @@ this.{java_naming.property_name(stmt.name)} = {literal_code};"""
             assert_never(stmt)
 
     blocks.append(
-        Stripped("\n".join(textwrap.indent(stmt_code, I) for stmt_code in body))
+        "\n".join(textwrap.indent(stmt_code, I) for stmt_code in body)
     )
 
-    blocks.append(Stripped("}"))
+    blocks.append("}")
 
     return Stripped("\n".join(blocks)), None
 
@@ -1026,7 +994,7 @@ def _generate_constructor(
 
     cls_name = java_naming.class_name(cls.name)
 
-    blocks = []  # type: List[Stripped]
+    blocks = []  # type: List[str]
 
     arg_codes = []  # type: List[Stripped]
     for arg in cls.constructor.arguments:
@@ -1039,13 +1007,13 @@ def _generate_constructor(
         arg_codes.append(Stripped(f"{arg_type} {arg_name}"))
 
     if len(arg_codes) == 0:
-        blocks.append(Stripped(f"public {cls_name}() {{"))
+        blocks.append(f"public {cls_name}() {{")
     elif len(arg_codes) == 1:
-        blocks.append(Stripped(f"public {cls_name}({arg_codes[0]}) {{"))
+        blocks.append(f"public {cls_name}({arg_codes[0]}) {{")
     else:
         arg_block = ",\n".join(arg_codes)
         arg_block_indented = textwrap.indent(arg_block, II)
-        blocks.append(Stripped(f"public {cls_name}(\n{arg_block_indented}) {{"))
+        blocks.append(f"public {cls_name}(\n{arg_block_indented}) {{")
 
     body = []  # type: List[Stripped]
 
@@ -1078,32 +1046,41 @@ this.{prop_name} = Objects.requireNonNull(
                         type_annotation=type_annotation
                     )
 
+                    prop_name = java_naming.property_name(stmt.name)
+
                     arg_name = java_naming.argument_name(stmt.argument)
 
                     # Write the assignment as a ternary operator
-                    writer = io.StringIO()
-                    writer.write(f"this.{java_naming.property_name(stmt.name)} = ")
-                    writer.write(f"({arg_name} != null)\n")
-                    writer.write(textwrap.indent(f"? {arg_name}\n", I))
-                    writer.write(textwrap.indent(f": new {prop_type}();", I))
 
-                    body.append(Stripped(writer.getvalue()))
+                    assignment = Stripped(
+                        f"""\
+this.{prop_name} = ({arg_name} != null)
+{I}? {arg_name}
+{I}: new {prop_type}();"""
+                    )
+
+                    body.append(assignment)
                 elif isinstance(
                     stmt.default, intermediate_construction.DefaultEnumLiteral
                 ):
-                    literal_code = ".".join(
-                        [
-                            java_naming.enum_name(stmt.default.enum.name),
-                            java_naming.enum_literal_name(stmt.default.literal.name),
-                        ]
+                    enum_name = java_naming.enum_name(stmt.default.enum.name)
+
+                    enum_literal = java_naming.enum_literal_name(
+                        stmt.default.literal.name
                     )
 
+                    prop_name = java_naming.property_name(stmt.name)
+
                     arg_name = java_naming.argument_name(stmt.argument)
+
+                    # Write the assignment as a ternary operator
 
                     body.append(
                         Stripped(
                             f"""\
-this.{java_naming.property_name(stmt.name)} = ({arg_name} != null) {arg_name} : {literal_code};"""
+this.{prop_name} = ({arg_name} != null)
+{I}? {arg_name}
+{I}: {enum_name}.{enum_literal};"""
                         )
                     )
                 else:
@@ -1113,7 +1090,7 @@ this.{java_naming.property_name(stmt.name)} = ({arg_name} != null) {arg_name} : 
             assert_never(stmt)
 
     blocks.append(
-        Stripped("\n".join(textwrap.indent(stmt_code, I) for stmt_code in body))
+        "\n".join(textwrap.indent(stmt_code, I) for stmt_code in body)
     )
 
     blocks.append(Stripped("}"))
@@ -1452,7 +1429,7 @@ public <ContextT, T> T transform(
 def _generate_enum(
     enum: intermediate.Enumeration,
 ) -> Tuple[Optional[Stripped], Optional[Error]]:
-    """Generate Java code for the enum."""
+    """Generate Java code for the enumeration `enum`."""
     writer = io.StringIO()
 
     if enum.description is not None:

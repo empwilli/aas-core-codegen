@@ -15,6 +15,7 @@ from aas_core_codegen.common import (
     Error,
     Identifier,
     Stripped,
+    indent_but_first_line,
 )
 from aas_core_codegen.java.common import (
     INDENT as I,
@@ -37,6 +38,18 @@ def _generate_ivisitor(
     # Abstract classes have no particular implementation, so we do not visit
     # them.
     for cls in symbol_table.concrete_classes:
+        # NOTE (empwilli, 2023-12-14):
+        # Operate on interfaces instead of classes We operate on *interfaces*
+        # instead of concrete classes to allow for custom extensions and
+        # wrappers around our model classes.
+        #
+        # Originally, we used type overloading to dispatch the visit calls. After we
+        # decided to support custom wrappers and enhancements to our classes, we had
+        # to switch here to interfaces instead of concrete classes. The type
+        # overloading does not work anymore in this setting, as descendants of
+        # *concrete* classes would be wrongly dispatched. That is why we dispatch
+        # explicitly, by having different visit method names instead of mere
+        # type overloads.
         interface_name = java_naming.interface_name(cls.name)
         visit_name = java_naming.method_name(Identifier(f"visit_{cls.name}"))
 
@@ -86,19 +99,7 @@ def _generate_visitor_through(
     symbol_table: intermediate.SymbolTable, package: java_common.PackageIdentifier
 ) -> Stripped:
     """Generate the visitor that simply iterates over the instances."""
-    java_imports = [
-        Stripped(f"import {package}.types.model.*;"),
-        Stripped(f"import {package}.visitation.IVisitor;"),
-    ]  # type: List[Stripped]
-
-    blocks = [
-        Stripped(
-            f"""\
-public void visit(IClass that) {{
-{I}that.accept(this);
-}}"""
-        )
-    ]  # type: List[Stripped]
+    blocks = []  # type: List[Stripped]
 
     # Abstract classes are modeled as interfaces in Java, so we do not transform
     # them.
@@ -120,16 +121,13 @@ public void {visit_name}(
             )
         )
 
-    writer = io.StringIO()
+    visitor_blocks = "\n\n".join(blocks)
 
-    for java_import in java_imports:
-        writer.write(f"{java_import}\n")
+    code = Stripped(
+        f"""\
+import {package}.types.model.*;
+import {package}.visitation.IVisitor;
 
-    if len(java_imports) > 0:
-        writer.write("\n")
-
-    writer.write(
-        """\
 /**
  * Just descend through the instances without any action.
  *
@@ -137,17 +135,16 @@ public void {visit_name}(
  * want to descend through instances and apply actions only on a subset of
  * classes.
  */
-public class VisitorThrough implements IVisitor {"""
+public class VisitorThrough implements IVisitor {{
+{I}public void visit(IClass that) {{
+{II}that.accept(this);
+{I}}}
+
+{I}{indent_but_first_line(visitor_blocks, I)}
+}}"""
     )
 
-    for i, block in enumerate(blocks):
-        if i > 0:
-            writer.write("\n\n")
-        writer.write(textwrap.indent(block, I))
-
-    writer.write("\n}")
-
-    return Stripped(writer.getvalue())
+    return code
 
 
 def _generate_abstract_visitor(

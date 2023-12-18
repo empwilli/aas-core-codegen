@@ -310,7 +310,8 @@ public {prop_type} {getter_name}() {{
             Stripped(
                 f"""\
 @Override
-public void {setter_name}({inner_type} {prop_name}) {{
+public void {setter_name}(
+{I}{inner_type} {prop_name}) {{
 {I}instance.{setter_name}({prop_name});
 }}"""
             )
@@ -422,7 +423,6 @@ def _generate_enhanced(
     package: java_common.PackageIdentifier,
     spec_impls: specific_implementations.SpecificImplementations,
 ) -> Tuple[Optional[List[java_common.JavaFile]], Optional[List[Error]]]:
-
     files = []  # type: List[java_common.JavaFile]
 
     errors = []  # type: List[Error]

@@ -200,16 +200,21 @@ for ({inner_type} item : that.{getter_name}()) {{
                     )
                 )
             else:
+                other_property_name = java_naming.variable_name(
+                    Identifier(f"that_{arg.name}")
+                )
+
                 body_blocks.append(
                     Stripped(
                         f"""\
-{variable_type} that_{arg.name} = that.{getter_name}().orElse(null);
+{variable_type} {other_property_name} =
+{I}that.{getter_name}().orElse(null);
 {variable_type} {variable_name} = null;
-if (that_{arg.name} != null)
+if ({other_property_name} != null)
 {{
 {I}{variable_name} = new ArrayList<{inner_type}>(
-{II}that_{arg.name}.size());
-{I}for ({inner_type} item : that_{arg.name})
+{II}{other_property_name}.size());
+{I}for ({inner_type} item : {other_property_name})
 {I}{{
 {II}{variable_name}.add(deep(item));
 {I}}}
@@ -389,6 +394,12 @@ def generate(
         Stripped(f"import {package}.types.impl.*;"),
         Stripped(f"import {package}.types.model.*;"),
     ]  # type: List[Stripped]
+
+    # NOTE (empwilli, 2023-12-14):
+    # We wrap the shallow and deep copying in generic methods to allow for easier
+    # enforcement of runtime type safety for the client. Otherwise, if we directly
+    # provided the transformer, the client would always need to make the casts, which
+    # is cumbersome.
 
     copy_blocks = [
         Stripped(
