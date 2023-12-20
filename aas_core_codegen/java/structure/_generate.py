@@ -346,13 +346,11 @@ Stream.concat(Stream.<IClass>of({class_name}.this.{prop_name}),
             )
 
             if not recurse:
-                prop_expr = Stripped(
-                    f"StreamSupport.stream({class_name}.this.{prop_name}.spliterator(), false)"
-                )
+                prop_expr = Stripped(f"{class_name}.this.{prop_name}.stream()")
             else:
                 prop_expr = Stripped(
                     f"""\
-StreamSupport.stream({class_name}.this.{prop_name}.spliterator(), false)
+{class_name}.this.{prop_name}.stream()
 {I}.flatMap(item -> Stream.concat(Stream.<IClass>of(item),
 {II}StreamSupport.stream(item.descend().spliterator(), false)))"""
                 )
@@ -377,23 +375,19 @@ if ({prop_name} != null) {{
     return Stripped("\n\n".join(blocks))
 
 
-def _generate_descend_iterable_name(
-    cls: intermediate.ConcreteClass, recursive: bool
-) -> Stripped:
-    name = java_naming.class_name(cls.name)
-
-    if recursive:
-        return Stripped(f"{name}RecursiveIterable")
-    else:
-        return Stripped(f"{name}Iterable")
-
-
 def _generate_descend_iterable(
     cls: intermediate.ConcreteClass, recursive: bool
 ) -> Stripped:
     """Generate the iterator for the descend method."""
 
-    iterable_name = _generate_descend_iterable_name(cls, recursive)
+    cls_name = java_naming.class_name(cls.name)
+
+    iterable_name: Stripped
+
+    if recursive:
+        iterable_name = Stripped(f"{cls_name}RecursiveIterable")
+    else:
+        iterable_name = Stripped(f"{cls_name}Iterable")
 
     iterable_body = _generate_descend_body(cls, recursive)
 
@@ -435,7 +429,9 @@ def _generate_descend_method(
 ) -> Stripped:
     """Generate the recursive ``Descend`` method for the concrete class ``cls``."""
 
-    iterable_name = _generate_descend_iterable_name(cls=cls, recursive=True)
+    cls_name = java_naming.class_name(cls.name)
+
+    iterable_name = Stripped(f"{cls_name}RecursiveIterable")
 
     descend_body = None  # type: Optional[Stripped]
 
@@ -462,7 +458,9 @@ def _generate_descend_once_method(
 ) -> Stripped:
     """Generate the recursive ``Descend`` method for the concrete class ``cls``."""
 
-    iterable_name = _generate_descend_iterable_name(cls=cls, recursive=False)
+    cls_name = java_naming.class_name(cls.name)
+
+    iterable_name = Stripped(f"{cls_name}Iterable")
 
     descend_body = None  # type: Optional[Stripped]
 
@@ -657,6 +655,7 @@ def _generate_imports_for_class(
         Stripped(f"{package}.visitation.ITransformerWithContext"),
         Stripped(f"{package}.types.model.IClass"),
         Stripped("java.util.Optional"),
+        Stripped("java.util.Objects"),
     ]  # type: List[Stripped]
 
     if _has_descendable_properties(cls):
@@ -766,15 +765,10 @@ def _generate_interface(
         if prop.specified_for is not cls:
             continue
 
-        effective_type: intermediate.TypeAnnotation
-
-        if isinstance(prop.type_annotation, intermediate.OptionalTypeAnnotation):
-            effective_type = prop.type_annotation.value
-        else:
-            effective_type = prop.type_annotation
+        type_anno = intermediate.beneath_optional(prop.type_annotation)
 
         prop_type = java_common.generate_type(type_annotation=prop.type_annotation)
-        arg_type = java_common.generate_type(type_annotation=effective_type)
+        arg_type = java_common.generate_type(type_annotation=type_anno)
 
         prop_name = java_naming.property_name(prop.name)
 
@@ -800,9 +794,6 @@ def _generate_interface(
             blocks.append(Stripped(f"{prop_type} {getter_name}();"))
 
         blocks.append(Stripped(f"void {setter_name}({arg_type} {prop_name});"))
-        blocks.append(
-            Stripped(f"void {setter_name}(Optional<{arg_type}> {prop_name});")
-        )
 
     # endregion
 
@@ -898,38 +889,6 @@ Iterable<{items_type}> {method_name}();"""
     return Stripped(writer.getvalue()), None
 
 
-def _generate_default_value(default: intermediate.Default) -> Stripped:
-    """Generate the Java code representing the default value of an argument."""
-    code = None  # type: Optional[str]
-
-    if default is not None:
-        if isinstance(default, intermediate.DefaultPrimitive):
-            if default.value is None:
-                code = "null"
-            elif isinstance(default.value, bool):
-                code = "true" if default.value else "false"
-            elif isinstance(default.value, str):
-                code = java_common.string_literal(default.value)
-            elif isinstance(default.value, int):
-                code = str(default.value)
-            elif isinstance(default.value, float):
-                code = f"{default}d"
-            else:
-                assert_never(default.value)
-        elif isinstance(default, intermediate.DefaultEnumerationLiteral):
-            code = ".".join(
-                [
-                    java_naming.enum_name(default.enumeration.name),
-                    java_naming.enum_literal_name(default.literal.name),
-                ]
-            )
-        else:
-            assert_never(default)
-
-    assert code is not None
-    return Stripped(code)
-
-
 @require(lambda cls: not cls.is_implementation_specific)
 @require(lambda cls: not cls.constructor.is_implementation_specific)
 @ensure(lambda result: (result[0] is not None) ^ (result[1] is not None))
@@ -949,12 +908,8 @@ def _generate_default_constructor(
         return Stripped(""), None
 
     if not all(
-        map(
-            lambda arg: isinstance(
-                arg.type_annotation, intermediate.OptionalTypeAnnotation
-            ),
-            cls.constructor.arguments,
-        )
+        isinstance(arg.type_annotation, intermediate.OptionalTypeAnnotation)
+        for arg in cls.constructor.arguments
     ):
         return Stripped(""), None
 
@@ -964,7 +919,7 @@ def _generate_default_constructor(
 
     blocks.append(f"public {cls_name}() {{")
 
-    body = []  # type: List[str]
+    body = []  # type: List[Stripped]
 
     for stmt in cls.constructor.inlined_statements:
         if isinstance(stmt, intermediate_construction.AssignArgument):
@@ -1039,73 +994,91 @@ def _generate_constructor(
 
     blocks = []  # type: List[str]
 
-    arg_codes = []  # type: List[str]
+    arg_codes = []  # type: List[Stripped]
     for arg in cls.constructor.arguments:
-        arg_type_annotation: intermediate.TypeAnnotation
-        if isinstance(arg.type_annotation, intermediate.OptionalTypeAnnotation):
-            arg_type_annotation = arg.type_annotation.value
-        else:
-            arg_type_annotation = arg.type_annotation
+        type_anno = intermediate.beneath_optional(arg.type_annotation)
 
-        arg_type = java_common.generate_type(type_annotation=arg_type_annotation)
+        arg_type = java_common.generate_type(type_annotation=type_anno)
+
         arg_name = java_naming.argument_name(arg.name)
 
         arg_codes.append(Stripped(f"{arg_type} {arg_name}"))
 
     if len(arg_codes) == 0:
         blocks.append(f"public {cls_name}() {{")
-    if len(arg_codes) == 1:
+    elif len(arg_codes) == 1:
         blocks.append(f"public {cls_name}({arg_codes[0]}) {{")
     else:
         arg_block = ",\n".join(arg_codes)
         arg_block_indented = textwrap.indent(arg_block, II)
-        blocks.append(Stripped(f"public {cls_name}(\n{arg_block_indented}) {{"))
+        blocks.append(f"public {cls_name}(\n{arg_block_indented}) {{")
 
-    body = []  # type: List[str]
+    body = []  # type: List[Stripped]
 
     for stmt in cls.constructor.inlined_statements:
         if isinstance(stmt, intermediate_construction.AssignArgument):
             if stmt.default is None:
-                body.append(
-                    f"this.{java_naming.property_name(stmt.name)} = "
-                    f"{java_naming.argument_name(stmt.argument)};"
+                prop_name = java_naming.property_name(stmt.name)
+
+                arg_name = java_naming.argument_name(stmt.argument)
+
+                assignment = Stripped(
+                    f"""\
+this.{prop_name} = Objects.requireNonNull(
+{I}{arg_name},
+{I}"Argument \\"{arg_name}\\" must be non-null.");"""
                 )
+
+                body.append(assignment)
             else:
                 if isinstance(stmt.default, intermediate_construction.EmptyList):
                     prop = cls.properties_by_name[stmt.name]
 
-                    type_anno = prop.type_annotation
-                    while isinstance(type_anno, intermediate.OptionalTypeAnnotation):
-                        type_anno = type_anno.value
+                    type_annotation = prop.type_annotation
+                    while isinstance(
+                        type_annotation, intermediate.OptionalTypeAnnotation
+                    ):
+                        type_annotation = type_annotation.value
 
-                    prop_type = java_common.generate_type(type_annotation=type_anno)
+                    prop_type = java_common.generate_type(
+                        type_annotation=type_annotation
+                    )
+
+                    prop_name = java_naming.property_name(stmt.name)
 
                     arg_name = java_naming.argument_name(stmt.argument)
 
                     # Write the assignment as a ternary operator
-                    writer = io.StringIO()
-                    writer.write(f"this.{java_naming.property_name(stmt.name)} = ")
-                    writer.write(f"({arg_name} != null)\n")
-                    writer.write(textwrap.indent(f"? {arg_name}\n", I))
-                    writer.write(textwrap.indent(f": new {prop_type}();", I))
 
-                    body.append(writer.getvalue())
+                    assignment = Stripped(
+                        f"""\
+this.{prop_name} = ({arg_name} != null)
+{I}? {arg_name}
+{I}: new {prop_type}();"""
+                    )
+
+                    body.append(assignment)
                 elif isinstance(
                     stmt.default, intermediate_construction.DefaultEnumLiteral
                 ):
-                    literal_code = ".".join(
-                        [
-                            java_naming.enum_name(stmt.default.enum.name),
-                            java_naming.enum_literal_name(stmt.default.literal.name),
-                        ]
+                    enum_name = java_naming.enum_name(stmt.default.enum.name)
+
+                    enum_literal = java_naming.enum_literal_name(
+                        stmt.default.literal.name
                     )
 
+                    prop_name = java_naming.property_name(stmt.name)
+
                     arg_name = java_naming.argument_name(stmt.argument)
+
+                    # Write the assignment as a ternary operator
 
                     body.append(
                         Stripped(
                             f"""\
-this.{java_naming.property_name(stmt.name)} = ({arg_name} != null) {arg_name} : {literal_code};"""
+this.{prop_name} = ({arg_name} != null)
+{I}? {arg_name}
+{I}: {enum_name}.{enum_literal};"""
                         )
                     )
                 else:
@@ -1116,7 +1089,7 @@ this.{java_naming.property_name(stmt.name)} = ({arg_name} != null) {arg_name} : 
 
     blocks.append("\n".join(textwrap.indent(stmt_code, I) for stmt_code in body))
 
-    blocks.append("}")
+    blocks.append(Stripped("}"))
 
     return Stripped("\n".join(blocks)), None
 
@@ -1140,15 +1113,11 @@ def _generate_class(
     # region Properties
 
     for prop in cls.properties:
-        arg: intermediate.TypeAnnotation
-
-        if isinstance(prop.type_annotation, intermediate.OptionalTypeAnnotation):
-            arg = prop.type_annotation.value
-        else:
-            arg = prop.type_annotation
+        type_anno = intermediate.beneath_optional(prop.type_annotation)
 
         prop_type = java_common.generate_type(type_annotation=prop.type_annotation)
-        arg_type = java_common.generate_type(type_annotation=arg)
+
+        arg_type = java_common.generate_type(type_annotation=type_anno)
 
         prop_name = java_naming.property_name(prop.name)
 
@@ -1162,7 +1131,7 @@ def _generate_class(
             if prop_comment_errors:
                 return None, Error(
                     prop.description.parsed.node,
-                    f"Failed to generate the documentatoin comment "
+                    f"Failed to generate the documentation comment "
                     f"for the property {prop.name!r}",
                     prop_comment_errors,
                 )
@@ -1197,7 +1166,7 @@ private {arg_type} {prop_name};"""
                 Error(
                     cls.parsed.node,
                     f"The implementation of the implementation-specific constructor "
-                    f"is missign: {implementation_key}",
+                    f"is missing: {implementation_key}",
                 )
             )
         else:
@@ -1223,18 +1192,14 @@ private {arg_type} {prop_name};"""
 
     # endregion
 
-    # region getters and setters
+    # region Getters and setters
 
     for prop in cls.properties:
-        effective: intermediate.TypeAnnotation
-
-        if isinstance(prop.type_annotation, intermediate.OptionalTypeAnnotation):
-            effective = prop.type_annotation.value
-        else:
-            effective = prop.type_annotation
+        type_anno = intermediate.beneath_optional(prop.type_annotation)
 
         prop_type = java_common.generate_type(type_annotation=prop.type_annotation)
-        arg_type = java_common.generate_type(type_annotation=effective)
+
+        arg_type = java_common.generate_type(type_annotation=type_anno)
 
         prop_name = java_naming.property_name(prop.name)
 
@@ -1274,16 +1239,6 @@ public void {setter_name}({arg_type} {prop_name}) {{
             )
         )
 
-        get_set_blocks.append(
-            Stripped(
-                f"""\
-@Override
-public void {setter_name}(Optional<{arg_type}> {prop_name}) {{
-{I}this.{prop_name} = {prop_name}.orElse(null);
-}}"""
-            )
-        )
-
         blocks.append(Stripped("\n\n".join(get_set_blocks)))
 
     # endregion
@@ -1305,7 +1260,8 @@ public void {setter_name}(Optional<{arg_type}> {prop_name}) {{
                 Stripped(
                     f"""\
 /**
- * Iterate over {{@link {cls_name}#{prop_name}}}, if set, and otherwise return an empty iterator.
+ * Iterate over {{@link {cls_name}#{prop_name}}}, if set,
+ * and otherwise return an empty iterator.
  */
 public Iterable<{items_type}> {method_name}() {{
 {I}return {getter_name}().orElseGet(Collections::emptyList);
@@ -1315,7 +1271,7 @@ public Iterable<{items_type}> {method_name}() {{
 
     # endregion
 
-    # region public methods
+    # region Public methods
 
     for method in cls.methods:
         if isinstance(method, intermediate.ImplementationSpecificMethod):
@@ -1414,7 +1370,7 @@ public <ContextT, T> T transform(
 
     # endregion
 
-    # region inner classes
+    # region Inner classes
 
     if descendable:
         blocks.append(_generate_descend_iterable(cls=cls, recursive=False))
@@ -1469,7 +1425,7 @@ public <ContextT, T> T transform(
 def _generate_enum(
     enum: intermediate.Enumeration,
 ) -> Tuple[Optional[Stripped], Optional[Error]]:
-    """Generate Java code for the enum."""
+    """Generate Java code for the enumeration `enum`."""
     writer = io.StringIO()
 
     if enum.description is not None:
@@ -1690,7 +1646,9 @@ def _generate_structure(
             f"{package}.types.{java_common.CLASS_PKG}"
         )
 
-        java_source = _generate_java_file(structure_name, imports, code, package_name)
+        java_source = _generate_java_file(
+            file_name=structure_name, imports=imports, code=code, package=package_name
+        )
 
         files.append(java_source)
     else:
@@ -1718,7 +1676,9 @@ def _generate_structure(
                 f"{package}.types.{java_common.INTERFACE_PKG}"
             )
 
-            java_source = _generate_java_file(file_name, imports, code, package_name)
+            java_source = _generate_java_file(
+                file_name=file_name, imports=imports, code=code, package=package_name
+            )
 
             files.append(java_source)
 
@@ -1745,7 +1705,10 @@ def _generate_structure(
                 )
 
                 java_source = _generate_java_file(
-                    file_name, imports, code, package_name
+                    file_name=file_name,
+                    imports=imports,
+                    code=code,
+                    package=package_name,
                 )
 
                 files.append(java_source)
@@ -1768,7 +1731,9 @@ def _generate_structure(
                 f"{package}.types.{java_common.ENUM_PKG}"
             )
 
-            java_source = _generate_java_file(file_name, None, code, package_name)
+            java_source = _generate_java_file(
+                file_name=file_name, imports=None, code=code, package=package_name
+            )
 
             files.append(java_source)
         else:
@@ -1788,7 +1753,7 @@ def generate(
     """
     Generate the Java code of the structures based on the symbol table.
 
-    The ``package`` defines the AAS Java package.
+    The ``package`` defines the root Java package.
     """
 
     files = []  # type: List[JavaFile]

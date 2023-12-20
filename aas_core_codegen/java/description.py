@@ -173,17 +173,20 @@ class _ElementRenderer(intermediate_rendering.DocutilsElementTransformer[_NodeUn
             name = java_naming.enum_name(element.our_type.name)
 
         elif isinstance(element.our_type, intermediate.ConstrainedPrimitive):
+            # NOTE (empwilli, 2023-12-14):
             # We do not generate a class for constrained primitives, but we
             # leave it as class name, as that is what we used for ``Verify*`` function.
             name = java_naming.class_name(element.our_type.name)
 
         elif isinstance(element.our_type, intermediate.Class):
             if isinstance(element.our_type, intermediate.AbstractClass):
+                # NOTE (empwilli, 2023-12-14):
                 # We do not generate Java code for abstract classes, so we have to refer
                 # to the interface.
                 name = java_naming.interface_name(element.our_type.name)
 
             elif isinstance(element.our_type, intermediate.ConcreteClass):
+                # NOTE (empwilli, 2023-12-14):
                 # Though a concrete class can have multiple descendants and the writer
                 # might actually want to refer to the *interface* instead of
                 # the concrete class, we do the best effort here and resolve it to the
@@ -194,6 +197,7 @@ class _ElementRenderer(intermediate_rendering.DocutilsElementTransformer[_NodeUn
                 assert_never(element.our_type)
 
         else:
+            # NOTE (empwilli, 2023-12-14):
             # This is a very special case where we had problems with an interface.
             # We leave this check here, just in case the bug resurfaces.
             if isinstance(element.our_type, intermediate_translate._PlaceholderOurType):
@@ -227,6 +231,7 @@ class _ElementRenderer(intermediate_rendering.DocutilsElementTransformer[_NodeUn
                     element.reference.cls.name
                 )
             elif isinstance(element.reference.cls, intermediate.ConcreteClass):
+                # NOTE (empwilli, 2023-12-14):
                 # Though a concrete class can have multiple descendants and the writer
                 # might actually want to refer to the *interface* instead of
                 # the concrete class, we do the best effort here and resolve it to the
@@ -250,6 +255,7 @@ class _ElementRenderer(intermediate_rendering.DocutilsElementTransformer[_NodeUn
 
             cref = f"{name_of_our_type}#{literal_name}"
         else:
+            # NOTE (empwilli, 2023-12-14):
             # This is a very special case where we had problems with an interface.
             # We leave this check here, just in case the bug resurfaces.
             if isinstance(
@@ -548,6 +554,7 @@ def _render_summary_remarks_constraints(
         else:
             assert body is not None
 
+            # NOTE (empwilli, 2023-12-14):
             # We in-line the constraint prefix for better readability.
 
             # noinspection PyUnresolvedReferences
@@ -968,6 +975,7 @@ def _to_text(node: _NodeUnion) -> str:
     to_text_directives_visitor = _ToTextDirectivesVisitor()
     to_text_directives_visitor.visit(node)
 
+    # NOTE (empwilli, 2023-12-14):
     # We compress to do away with the new-line enforcement and consecutive and empty
     # blocks, so that the operations below become much easier to write.
     directives = _compress_text_directives(to_text_directives_visitor.directives)
@@ -1149,6 +1157,7 @@ def _render_description_of_signature(
     returns_node = None  # type: Optional[_NodeUnion]
 
     if description.returns is not None:
+        # NOTE (empwilli, 2023-12-14):
         # We need to help the type checker in PyCharm a bit.
         assert isinstance(description.returns, docutils.nodes.field_body)
 
