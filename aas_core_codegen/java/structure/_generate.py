@@ -1023,7 +1023,7 @@ def _generate_constructor(
                 arg_name = java_naming.argument_name(stmt.argument)
 
                 if isinstance(
-                    cls.properties_by_name[stmt.name],
+                    cls.properties_by_name[stmt.name].type_annotation,
                     intermediate.OptionalTypeAnnotation,
                 ):
                     assignment = Stripped(f"this.{prop_name} = {arg_name};")
