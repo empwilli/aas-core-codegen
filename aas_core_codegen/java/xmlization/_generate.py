@@ -59,6 +59,11 @@ private static class Result<T> {{
 {II}return new Result<>(null, error, false);
 {I}}}
 
+{I}public static <T, I> Result<T> failure(Result<I> other) {{
+{II}if(other.error == null) throw new IllegalArgumentException("Error must not be null.");
+{II}return new Result<>(null, other.error, false);
+{I}}}
+
 {I}public T getResult() {{
 {II}if (!isSuccess()) throw new IllegalStateException("Result is not present.");
 {II}return result;
@@ -80,11 +85,18 @@ private static class Result<T> {{
 {I}}}
 
 {I}public T onError(Function<Reporting.Error, T>  errorFunction){{
-{II}return map(Function.identity(),errorFunction);
+{II}return map(Function.identity(), errorFunction);
 {I}}}
 
-{I}public <I> Result<I> into() {{
-{II}return Result.<I>failure(this.error);
+{I}public <I> Result<I> intoError() {{
+{II}if (isSuccess()) {{
+{III}throw new IllegalStateException("Result must be error.");
+{II}}}
+{II}return Result.failure(this.error);
+{I}}}
+
+{I}public static <I> Result<I> convert(Result<? extends I> result) {{
+{II}return new Result<I>(result.result, result.error, result.success);
 {I}}}
 }}"""
     )
@@ -135,8 +147,7 @@ private static Boolean tryContentAsBool(XMLEventReader reader) throws XMLStreamE
 {II}reader.nextEvent();
 {I}}}
 
-{I}Boolean boolValue = Boolean.valueOf(content.toString());
-{I}return boolValue;
+{I}return Boolean.valueOf(content.toString());
 }}
 
 private static Long tryContentAsLong(XMLEventReader reader) throws XMLStreamException {{
@@ -149,8 +160,7 @@ private static Long tryContentAsLong(XMLEventReader reader) throws XMLStreamExce
 {II}reader.nextEvent();
 {I}}}
 
-{I}Long longValue = Long.valueOf(content.toString());
-{I}return longValue;
+{I}return Long.valueOf(content.toString());
 }}
 
 private static Double tryContentAsDouble(XMLEventReader reader) throws XMLStreamException {{
@@ -163,8 +173,7 @@ private static Double tryContentAsDouble(XMLEventReader reader) throws XMLStream
 {II}reader.nextEvent();
 {I}}}
 
-{I}Double doubleValue = Double.valueOf(content.toString());
-{I}return doubleValue;
+{I}return Double.valueOf(content.toString());
 }}
 
 /**
@@ -250,15 +259,15 @@ def _generate_deserialize_primitive_property(
 
     deserialization_expr = None  # type: Optional[str]
     if a_type is intermediate.PrimitiveType.BOOL:
-        deserialization_expr = "DeserializeImplementation.tryContentAsBool(reader)"
+        deserialization_expr = "tryContentAsBool(reader)"
     elif a_type is intermediate.PrimitiveType.INT:
-        deserialization_expr = "DeserializeImplementation.tryContentAsInt(reader)"
+        deserialization_expr = "tryContentAsInt(reader)"
     elif a_type is intermediate.PrimitiveType.FLOAT:
-        deserialization_expr = "DeserializeImplementation.tryContentAsFloat(reader)"
+        deserialization_expr = "tryContentAsFloat(reader)"
     elif a_type is intermediate.PrimitiveType.STR:
-        deserialization_expr = "DeserializeImplementation.tryContentAsString(reader)"
+        deserialization_expr = "tryContentAsString(reader)"
     elif a_type is intermediate.PrimitiveType.BYTEARRAY:
-        deserialization_expr = "DeserializeImplementation.tryContentAsBase64(reader)"
+        deserialization_expr = "tryContentAsBase64(reader)"
     else:
         assert_never(a_type)
 
@@ -282,7 +291,7 @@ final Reporting.Error error = new Reporting.Error(
 error.prependSegment(
 {I}new Reporting.NameSegment(
 {II}{xml_prop_name_literal}));
-return null;"""
+return Result.failure(error);"""
         )
 
     return Stripped(
@@ -296,7 +305,7 @@ else {{
 {III}"Expected an XML content representing " +
 {III}"the property {prop_name} of an instance of class {cls_name}, " +
 {III}"but reached the end-of-file");
-{II}return null;
+{II}return Result.failure(error);
 {I}}}
 
 {I}try {{
@@ -421,7 +430,7 @@ private static Result<XMLEvent> verifyClosingTagForClass(
 {I}}}
 {I}final Result<String> tryEndElementName = tryElementName(reader);
 {I}if (tryEndElementName.isError()) {{
-{II}return tryEndElementName.into();
+{II}return Result.failure(tryEndElementName);
 {I}}}
 {I}if (isWrongClosingTag(tryElementName, tryEndElementName)) {{
 {II}final Reporting.Error error = new Reporting.Error(
@@ -486,7 +495,7 @@ if (currentEvent(reader).isEndDocument()) {{
 
 String {text_target_var};
 try {{
-{I}{text_target_var} = DeserializeImplementation.tryContentAsString(reader);
+{I}{text_target_var} = tryContentAsString(reader);
 }} catch (XMLStreamException e) {{
 {I}final Reporting.Error error = new Reporting.Error(
 {III}"The property {prop_name} of an instance of class {prop_type_name} "
@@ -587,7 +596,7 @@ if ({try_target_var}.isError()) {{
 {II}.prependSegment(
 {III}new Reporting.NameSegment(
 {IIII}{xml_prop_name_literal}));
-{I}return {try_target_var}.into();
+{I}return Result.failure({try_target_var});
 }}
 
 {target_var} = {try_target_var}.getResult();"""
@@ -621,7 +630,7 @@ if ({try_target_var}.isError()) {{
 {II}.prependSegment(
 {III}new Reporting.NameSegment(
 {IIII}{xml_prop_name_literal}));
-{I}return {try_target_var}.into();
+{I}return Result.failure({try_target_var});
 }}
 
 {target_var} = {try_target_var}.getResult();"""
@@ -676,7 +685,7 @@ if (!isEmptyProperty) {{
 {III}itemResult.getError()
 {IIII}.prependSegment(
 {IIIII}new Reporting.NameSegment("{target_var}"));
-{III}return itemResult.into();
+{III}return Result.failure(itemResult);
 {II}}}
 
 {II}{target_var}.add(itemResult.getResult());
@@ -867,7 +876,7 @@ while (true) {{
 
 {I}final Result<String> tryElementName = tryElementName(reader);
 {I}if (tryElementName.isError()) {{
-{II}return tryElementName.into();
+{II}return Result.failure(tryElementName);
 {I}}}
 
 {I}final boolean isEmptyProperty = isEmptyElement(reader);
@@ -884,7 +893,7 @@ while (true) {{
 {III}"{name}",
 {III}reader,
 {III}tryElementName);
-{II}if (checkEndElement.isError()) return checkEndElement.into();
+{II}if (checkEndElement.isError()) return Result.failure(checkEndElement);
 {I}}}
 }}"""
         )
@@ -914,7 +923,7 @@ if ({target_var} == null) {{
 {I}final Reporting.Error error = new Reporting.Error(
 {II}"The required property {prop_java} has not been given " +
 {II}"in the XML representation of an instance of class {name}");
-{I}return null;
+{I}return Result.failure(error);
 }}"""
                 )
             )
@@ -1039,7 +1048,7 @@ if (currentEvent.getEventType() != XMLStreamConstants.START_ELEMENT) {{
 
 final Result<String> tryElementName = tryElementName(reader);
 if (tryElementName.isError()) {{
-{I}return tryElementName.into();
+{I}return Result.failure(tryElementName);
 }}
 
 final String elementName = tryElementName.getResult();
@@ -1061,7 +1070,7 @@ if (!isEmptyElement) {{
 {II}"{name}",
 {II}reader,
 {II}tryElementName);
-{I}if (checkEndElement.isError()) return checkEndElement.into();
+{I}if (checkEndElement.isError()) return Result.failure(checkEndElement);
 }}
 
 return result;"""
@@ -1114,14 +1123,13 @@ if (currentEvent.getEventType() != XMLStreamConstants.START_ELEMENT) {{
         )
 
         implementer_name = java_naming.class_name(implementer.name)
+        implementer_name_elem = java_naming.variable_name(Identifier(f"the_{implementer.name}"))
 
         case_stmts.append(
             Stripped(
                 f"""\
 case {implementer_xml_name_literal}:
-{I}return {implementer_name}FromElement(
-{II}reader
-).into();"""
+{I}return Result.convert({implementer_name}FromElement(reader));"""
             )
         )
 
@@ -1141,7 +1149,7 @@ default:
 Result<String> tryElementName = tryElementName(
 {I}reader);
 if (tryElementName.isError()) {{
-{I}return tryElementName.into();
+{I}return Result.failure(tryElementName);
 }}
 
 final String elementName = tryElementName.getResult();
@@ -1184,6 +1192,10 @@ def _generate_deserialize_impl(
 ) -> Tuple[Optional[Stripped], Optional[List[Error]]]:
     """Generate the implementation for deserialization functions."""
     blocks = [
+        _generate_current_event(),
+        _generate_get_event_type_as_string(),
+        _generate_is_empty_element(),
+        _generate_verify_closing_tag_for_class(),
         _generate_skip_whitespace_and_comments(),
         _generate_try_element_name(),
         _generate_try_content_for_primitives(),
@@ -1266,16 +1278,16 @@ def _generate_deserialize_impl(
 /**
  * Implement the deserialization of meta-model classes from XML.
  *
- * <p>The implementation propagates an {{@link Reporting#Error}} instead of
+ * <p>The implementation propagates an {@link Reporting#Error} instead of
  * relying on exceptions. Under the assumption that incorrect data is much less
  * frequent than correct data, this makes the deserialization more
  * efficient.
  *
  * <p>However, we do not want to force the client to deal with
- * the {{@link Reporting#Error}} class as this is not intuitive.
+ * the {@link Reporting#Error} class as this is not intuitive.
  * Therefore we distinguish the implementation, realized in
- * {{@link DeserializeImplementation}}, and the facade given in
- * {{@link Deserialize}} class.
+ * {@link DeserializeImplementation}, and the facade given in
+ * {@link Deserialize} class.
  */
 private static class DeserializeImplementation
 {
@@ -1298,7 +1310,7 @@ def _generate_deserialize_from(name: Identifier) -> Stripped:
 
     writer.write(
         f"""\
-/*
+/**
  * Deserialize an instance of {name} from {{@code reader}}.
  *
  * @param reader Initialized XML reader with cursor set to the element
@@ -1314,16 +1326,25 @@ def _generate_deserialize_from(name: Identifier) -> Stripped:
         f"""\
 public static {name} {from_name}(
 {I}XMLEventReader reader) {{
-{I}Result<{name}> result = (
+
+{I}DeserializeImplementation.skipWhitespaceAndComments(reader);
+
+{I}if (DeserializeImplementation.currentEvent(reader).getEventType() == XMLStreamConstants.START_DOCUMENT) {{
+{II}String reason = "Unexpected XML declaration when reading an instance "
+{III}+ "of class {name}, as we expect the reader "
+{III}+ "to be set at content.";
+{II}throw new DeserializeException("", reason);
+{I}}}
+
+{I}Result<{name}> result = 
 {II}DeserializeImplementation.{name}FromElement(
-{III}reader));
-{I}if (result.isError()) {{
-{II}Reporting.Error error = result.getError();
-{II}throw new Xmlization.DeserializeException(
+{III}reader);
+
+{I}return result.onError(error -> {{
+{II}throw new DeserializeException(
 {III}Reporting.generateRelativeXPath(error.getPathSegments()),
 {III}error.getCause());
-{I}}}
-{I}return result.getResult();
+{I}}});
 }}"""
     )
 
@@ -2084,21 +2105,9 @@ def generate(
 
     xml_result_class = _generate_result()
 
-    xml_current_event = _generate_current_event()
-
-    xml_skip_whitespace_and_comments = _generate_skip_whitespace_and_comments()
-
-    xml_get_event_type_as_string = _generate_get_event_type_as_string()
-
-    xml_try_element_name = _generate_try_element_name()
-
-    xml_verify_closing_tag_for_class = _generate_verify_closing_tag_for_class()
-
     xml_namespace_literal = java_common.string_literal(
         symbol_table.meta_model.xml_namespace
     )
-
-    xml_is_empty_element = _generate_is_empty_element()
 
     # endregion
 
@@ -2198,18 +2207,6 @@ public class Xmlization
 {II}{xml_namespace_literal};
 
 {I}{indent_but_first_line(xml_result_class, I)}
-
-{I}{indent_but_first_line(xml_current_event, I)}
-
-{I}{indent_but_first_line(xml_skip_whitespace_and_comments, I)}
-
-{I}{indent_but_first_line(xml_get_event_type_as_string, I)}
-
-{I}{indent_but_first_line(xml_try_element_name, I)}
-
-{I}{indent_but_first_line(xml_verify_closing_tag_for_class, I)}
-
-{I}{indent_but_first_line(xml_is_empty_element, I)}
 
 {I}{indent_but_first_line(deserialize_impl_block, I)}
 
