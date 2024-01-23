@@ -1329,7 +1329,7 @@ public static Stream<Reporting.Error> verifyToErrorStream(IClass that) {{
 }}
 
 private static class ValidationErrorIterable implements Iterable<Reporting.Error> {{
-{I}private IClass element;
+{I}private final IClass element;
 
 {I}public ValidationErrorIterable(IClass element) {{
 {II}this.element = element;
@@ -1527,7 +1527,7 @@ public class Verification {{
 
     blocks = [
         java_common.WARNING,
-        Stripped(f"package {package}.Verification;"),
+        Stripped(f"package {package}.verification;"),
         Stripped("\n".join(imports)),
         Stripped(verification_writer.getvalue()),
         java_common.WARNING,

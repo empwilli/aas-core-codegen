@@ -360,7 +360,7 @@ Stream.concat(Stream.<IClass>of({class_name}.this.{prop_name}),
         stream_stmt = Stripped(
             f"""\
 if ({prop_name} != null) {{
-{I}memberStream = Stream.<IClass>concat(memberStream,
+{I}memberStream = Stream.concat(memberStream,
 {II}{indent_but_first_line(prop_expr, II)});
 }}"""
         )
@@ -479,118 +479,18 @@ public Iterable<IClass> descendOnce() {{
     )
 
 
-class _ImportCollector:
-    """Collect necessary imports."""
-
-    _package: Final[java_common.PackageIdentifier]
-
-    def __init__(self, package: java_common.PackageIdentifier) -> None:
-        self._package = package
-
-    def transform(
-        self,
-        type_annotation: intermediate.TypeAnnotationUnion,
-    ) -> List[Stripped]:
-        """
-        Dispatch the given type annotation for transforming.
-
-        :param type_annotation: Type annotation to transform.
-        """
-        if isinstance(type_annotation, intermediate.PrimitiveTypeAnnotation):
-            return self._transform_primitive_type_annotation(
-                type_annotation=type_annotation,
-            )
-
-        elif isinstance(type_annotation, intermediate.OurTypeAnnotation):
-            return self._transform_our_type_annotation(
-                type_annotation=type_annotation,
-            )
-
-        elif isinstance(type_annotation, intermediate.ListTypeAnnotation):
-            return self._transform_list_type_annotation(
-                type_annotation=type_annotation,
-            )
-
-        elif isinstance(type_annotation, intermediate.OptionalTypeAnnotation):
-            return self._transform_optional_type_annotation(
-                type_annotation=type_annotation,
-            )
-        else:
-            assert_never(type_annotation)
-
-        raise AssertionError("Should not have gotten here")
-
-    def _transform_primitive_type_annotation(
-        self,
-        type_annotation: intermediate.PrimitiveTypeAnnotation,
-    ) -> List[Stripped]:
-        """Generate code for the given specific ``type_annotation``."""
-        return []
-
-    def _transform_our_type_annotation(
-        self,
-        type_annotation: intermediate.OurTypeAnnotation,
-    ) -> List[Stripped]:
-        """Generate code for the given specific ``type_annotation``."""
-
-        our_type_pkg = None  # type: Optional[str]
-
-        our_type = type_annotation.our_type
-
-        if isinstance(our_type, intermediate.ConstrainedPrimitive):
-            return []
-        elif isinstance(our_type, intermediate.Enumeration):
-            our_type_pkg = java_common.ENUM_PKG
-        elif isinstance(our_type, intermediate.Class):
-            our_type_pkg = java_common.INTERFACE_PKG
-        else:
-            assert_never(our_type)
-
-        assert our_type_pkg is not None
-
-        our_type_name = java_common.generate_type(type_annotation)
-
-        return [Stripped(f"{self._package}.types.{our_type_pkg}.{our_type_name}")]
-
-    def _transform_list_type_annotation(
-        self,
-        type_annotation: intermediate.ListTypeAnnotation,
-    ) -> List[Stripped]:
-        """Generate code for the given specific ``type_annotation``."""
-        imports = self.transform(type_annotation.items)
-
-        imports.append(Stripped("java.util.List"))
-
-        return imports
-
-    def _transform_optional_type_annotation(
-        self,
-        type_annotation: intermediate.OptionalTypeAnnotation,
-    ) -> List[Stripped]:
-        """Generate code for the given specific ``type_annotation``."""
-        imports = self.transform(type_annotation.value)
-
-        if len(imports) > 0 and isinstance(
-            type_annotation.value, intermediate.ListTypeAnnotation
-        ):
-            imports.extend(
-                [
-                    Stripped("java.lang.Iterable"),
-                    Stripped("java.util.Collections"),
-                ]
-            )
-
-        imports.append(Stripped("java.util.Optional"))
-
-        return imports
-
-
 def _generate_imports_for_interface(
     cls: intermediate.ClassUnion,
     package: java_common.PackageIdentifier,
 ) -> Stripped:
     """Generate necessary Java Platform imports for the given class ``cls``."""
-    imports = []  # type: List[Stripped]
+    imports = [
+        Stripped(f"{package}.types.enums.*"),
+        Stripped(f"{package}.types.impl.*"),
+        Stripped(f"{package}.types.model.*"),
+        Stripped("java.util.List"),
+        Stripped("javax.annotation.Generated"),
+    ]  # type: List[Stripped]
 
     if len(cls.inheritances) == 0:
         import_name = Stripped(f"{package}.types.{java_common.INTERFACE_PKG}.IClass")
@@ -608,35 +508,7 @@ def _generate_imports_for_interface(
     if any(prop for prop in cls.properties if prop.specified_for is cls):
         imports.append(Stripped("java.util.Optional"))
 
-    for prop in cls.properties:
-        if prop.specified_for is not cls:
-            continue
-
-        import_collector = _ImportCollector(package)
-
-        prop_imports = import_collector.transform(prop.type_annotation)
-
-        imports.extend(prop_imports)
-
-    for method in cls.methods:
-        if method.specified_for is not cls:
-            continue
-
-        import_collector = _ImportCollector(package)
-
-        if method.returns is not None:
-            return_imports = import_collector.transform(method.returns)
-
-            imports.extend(return_imports)
-
-        for arg in method.arguments:
-            arg_imports = import_collector.transform(arg.type_annotation)
-
-            imports.extend(arg_imports)
-
-    unique_imports = sorted(set(imports))
-
-    return Stripped("\n".join(map(lambda imp: f"import {imp};", unique_imports)))
+    return Stripped("\n".join(map(lambda imp: f"import {imp};", imports)))
 
 
 def _generate_imports_for_class(
@@ -652,9 +524,14 @@ def _generate_imports_for_class(
         Stripped(f"{package}.visitation.IVisitorWithContext"),
         Stripped(f"{package}.visitation.ITransformer"),
         Stripped(f"{package}.visitation.ITransformerWithContext"),
-        Stripped(f"{package}.types.model.IClass"),
+        Stripped(f"{package}.types.enums.*"),
+        Stripped(f"{package}.types.impl.*"),
+        Stripped(f"{package}.types.model.*"),
+        Stripped("java.util.Collections"),
+        Stripped("java.util.List"),
         Stripped("java.util.Optional"),
         Stripped("java.util.Objects"),
+        Stripped("javax.annotation.Generated"),
     ]  # type: List[Stripped]
 
     if _has_descendable_properties(cls):
@@ -685,29 +562,7 @@ def _generate_imports_for_class(
             ]
         )
 
-    for prop in cls.properties:
-        import_collector = _ImportCollector(package)
-
-        prop_imports = import_collector.transform(prop.type_annotation)
-
-        imports.extend(prop_imports)
-
-    for method in cls.methods:
-        import_collector = _ImportCollector(package)
-
-        if method.returns is not None:
-            return_imports = import_collector.transform(method.returns)
-
-            imports.extend(return_imports)
-
-        for arg in method.arguments:
-            arg_imports = import_collector.transform(arg.type_annotation)
-
-            imports.extend(arg_imports)
-
-    unique_imports = sorted(set(imports))
-
-    return Stripped("\n".join(map(lambda imp: f"import {imp};", unique_imports)))
+    return Stripped("\n".join(map(lambda imp: f"import {imp};", imports)))
 
 
 @ensure(lambda result: (result[0] is None) ^ (result[1] is None))
@@ -744,9 +599,13 @@ def _generate_interface(
 
     assert len(inheritances) > 0
     if len(inheritances) == 1:
-        writer.write(f"public interface {name} extends {inheritance_names[0]} {{\n")
+        writer.write(f"""\
+@Generated("generated by aas-core-codegen")
+public interface {name} extends {inheritance_names[0]} {{\n""")
     else:
-        writer.write(f"public interface {name} extends\n")
+        writer.write(f"""
+@Generated("generated by aas-core-codegen")
+public interface {name} extends\n""")
         for i, inheritance_name in enumerate(inheritance_names):
             if i > 0:
                 writer.write(",\n")
@@ -1413,7 +1272,9 @@ public <ContextT, T> T transform(
         writer.write(comment)
         writer.write("\n")
 
-    writer.write(f"public class {name} implements {interface_name} {{\n")
+    writer.write(f"""\
+@Generated("generated by aas-core-codegen")
+public class {name} implements {interface_name} {{\n""")
 
     for i, block in enumerate(blocks):
         if i > 0:
@@ -1451,10 +1312,14 @@ def _generate_enum(
 
     name = java_naming.enum_name(enum.name)
     if len(enum.literals) == 0:
-        writer.write(f"public enum {name} {{\n}}")
+        writer.write(f"""\
+@Generated("generated by aas-core-codegen")
+public enum {name} {{\n}}""")
         return Stripped(writer.getvalue()), None
 
-    writer.write(f"public enum {name} {{\n")
+    writer.write(f"""\
+@Generated("generated by aas-core-codegen")
+public enum {name} {{\n""")
     for i, literal in enumerate(enum.literals):
         if i > 0:
             writer.write(",\n")
@@ -1540,10 +1405,12 @@ import {package}.visitation.ITransformerWithContext;
 import {package}.visitation.IVisitor;
 import {package}.visitation.IVisitorWithContext;
 import java.lang.Iterable;
+import javax.annotation.Generated;
 
 /**
  * Represent a general class of an AAS model.
  */
+@Generated("generated by aas-core-codegen")
 public interface IClass {{
 {I}/**
 {I} * Iterate over all the class instances referenced from this instance
@@ -1714,6 +1581,8 @@ def _generate_structure(
             assert code is not None
             structure_name = java_naming.enum_name(our_type.name)
 
+            imports = Stripped("import javax.annotation.Generated;")  # type: Stripped
+
             file_name = java_common.enum_package_path(structure_name)
 
             package_name = java_common.PackageIdentifier(
@@ -1721,7 +1590,7 @@ def _generate_structure(
             )
 
             java_source = _generate_java_file(
-                file_name=file_name, imports=None, code=code, package=package_name
+                file_name=file_name, imports=imports, code=code, package=package_name
             )
 
             files.append(java_source)
