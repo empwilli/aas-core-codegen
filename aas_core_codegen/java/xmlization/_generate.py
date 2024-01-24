@@ -423,7 +423,7 @@ private static Result<XMLEvent> verifyClosingTagForClass(
 {I}}}
 {I}if (isWrongClosingTag(tryElementName, tryEndElementName)) {{
 {II}final Reporting.Error error = new Reporting.Error(
-{IIII}"Expected an XML end element to conclude a property of class ConceptDescription " + className
+{IIII}"Expected an XML end element to conclude a property of class " + className
 {IIIIII}+ " with the element name " + tryElementName.getResult() + ", "
 {IIIIII}+ "but got the end element with the name " + tryEndElementName.getResult());
 {II}return Result.failure(error);
