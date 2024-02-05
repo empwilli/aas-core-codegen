@@ -216,7 +216,6 @@ private static boolean whiteSpaceOrComment(XMLEventReader reader) {{
 }}"""
     )
 
-
 def _generate_skip_start_document() -> Stripped:
     """Generate the function to skip start document."""
     return Stripped(
@@ -227,7 +226,6 @@ private static void skipStartDocument(XMLEventReader reader){{
 {I}}}
 }}"""
     )
-
 
 def _generate_is_empty_element() -> Stripped:
     """Generate the function to check if an element is empty."""
@@ -1517,7 +1515,7 @@ writer.writeCharacters({base64_prop_name});"""
 try {{
 {I}{indent_but_first_line(write_value_block, I)}
 }} catch (XMLStreamException exception) {{
-{I}error = new Reporting.Error(exception.getMessage());
+{I}throw new SerializeException("",exception.getMessage());
 }}"""
     )
 
@@ -1590,7 +1588,7 @@ writer.writeEndElement();"""
 try {{
 {I}{indent_but_first_line(write_value_block, I)}
 }} catch (XMLStreamException exception) {{
-{I}error = new Reporting.Error(exception.getMessage());
+{I}throw new SerializeException("",exception.getMessage());
 }}"""
     )
 
@@ -1653,7 +1651,7 @@ writer.writeEndElement();"""
 try {{
 {I}{indent_but_first_line(result, I)}
 }} catch (XMLStreamException exception) {{
-{I}error = new Reporting.Error(exception.getMessage());
+{I}throw new SerializeException("",exception.getMessage());
 }}"""
     )
 
@@ -1709,7 +1707,7 @@ writer.writeEndElement();"""
 try {{
 {I}{indent_but_first_line(result, I)}
 }} catch (XMLStreamException exception) {{
-{I}error = new Reporting.Error(exception.getMessage());
+{I}throw new SerializeException("",exception.getMessage());
 }}"""
     )
 
@@ -1748,8 +1746,8 @@ if (that.{getter_name}().isPresent()) {{
 {II}this.visit(
 {III}item,
 {III}writer);
+{II}}}
 {I}writer.writeEndElement();
-{I}}}
 }}"""
         )
     else:
@@ -1772,7 +1770,7 @@ writer.writeEndElement();"""
 try {{
 {I}{indent_but_first_line(result, I)}
 }} catch (XMLStreamException exception) {{
-{I}error = new Reporting.Error(exception.getMessage());
+{I}throw new SerializeException("",exception.getMessage());
 }}"""
     )
 
@@ -1892,7 +1890,7 @@ public void {visit_name}(
 {III}writer);
 {II}writer.writeEndElement();
 }} catch (XMLStreamException exception) {{
-{I}error = new Reporting.Error(exception.getMessage());
+{I}throw new SerializeException("",exception.getMessage());
 }}
 }}"""
     )
@@ -1955,15 +1953,6 @@ def _generate_visitor(
 static class VisitorWithWriter
 {I}extends AbstractVisitorWithContext<XMLStreamWriter> {{
 
-Reporting.Error error = null;
-
-public boolean isError() {{
-{I}return error != null;
-}}
-
-public Reporting.Error getError() {{
-{I}return error;
-}}
 """
     )
 
@@ -1997,12 +1986,6 @@ public static void to(
 {I}XMLStreamWriter writer) throws SerializeException {{
 {I}Serialize._visitorWithWriter.visit(
 {II}that, writer);
-{I}if (Serialize._visitorWithWriter.isError()) {{
-{II}Reporting.Error error = Serialize._visitorWithWriter.getError();
-{II}throw new SerializeException("",
-{II}"Failed to serialize object graph: " +
-{II}error.getCause());
-{I}}}
 }}"""
         ),
     ]  # type: List[Stripped]
